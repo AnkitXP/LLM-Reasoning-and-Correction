@@ -46,8 +46,3 @@ class MATH(Dataset):
             sample = self.transform(sample)
         
         return sample
-    
-
-if __name__ == '__main__':
-    math = MATH(split='train')
-    print(math[0])
