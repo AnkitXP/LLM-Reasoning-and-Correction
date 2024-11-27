@@ -3,6 +3,10 @@ import os
 from torch.utils.data import Dataset
 
 class MATH(Dataset):
+    """
+    Creates the Math Dataset from the JSON files and the base for the dataloader
+    """
+
     def __init__(self, data_dir = 'data/MATH', split='train'):
         self.data_dir = os.path.join(data_dir, split)
         self.data = self.load_data()
@@ -27,17 +31,8 @@ class MATH(Dataset):
     def __getitem__(self, idx):
         
         item = self.data[idx]
-        
-        # Extract relevant information from the JSON data
-        problem = item['problem']
-        solution = item['solution']
-        
-        sample = {
-            'problem': problem,
-            'solution': solution
-        }
-        
-        return sample
+                
+        return item['problem'], item['solution']
 
 if __name__=='__main__':
     data = MATH()

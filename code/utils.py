@@ -1,4 +1,6 @@
 import pprint
+import torch
+import numpy as np
 
 def last_boxed_only(sample):
     """
@@ -104,3 +106,27 @@ def remove_boxed(s):
         return s[len(left):-1]
     except:
         return None
+
+def pad(tensors, padding_value = 0, padding_side = "right"):
+    """
+    Pads a list of tensors to the same shape along the first dimension.
+    """
+    # Determine the maximum shape for each dimension
+    output_shape = np.max([t.shape for t in tensors], 0).tolist()
+
+    # Create an output tensor filled with the padding value
+    output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
+
+    for i, t in enumerate(tensors):
+        # Determine the slice for the sequence dimension
+        if padding_side == "left":
+            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+        elif padding_side == "right":
+            seq_slice = slice(0, t.shape[0])
+        else:
+            raise ValueError("padding_side must be 'left' or 'right'")
+
+        slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
+        output[i][slices] = t
+
+    return output
