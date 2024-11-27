@@ -3,9 +3,8 @@ import os
 from torch.utils.data import Dataset
 
 class MATH(Dataset):
-    def __init__(self, data_dir = '../data/MATH', split='train', transform=None):
+    def __init__(self, data_dir = 'data/MATH', split='train'):
         self.data_dir = os.path.join(data_dir, split)
-        self.transform = transform
         self.data = self.load_data()
     
     def load_data(self):
@@ -17,6 +16,8 @@ class MATH(Dataset):
                     file_path = os.path.join(root, file_name)
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = json.load(f)
+                        content.pop('level')
+                        content.pop('type')
                         data.append(content)
         return data
 
@@ -29,20 +30,15 @@ class MATH(Dataset):
         
         # Extract relevant information from the JSON data
         problem = item['problem']
-        level = item['level']
-        problem_type = item['type']
         solution = item['solution']
         
-        # Create a sample dictionary
         sample = {
             'problem': problem,
-            'level': level,
-            'type': problem_type,
             'solution': solution
         }
         
-        # Apply any transformations if specified
-        if self.transform:
-            sample = self.transform(sample)
-        
         return sample
+
+if __name__=='__main__':
+    data = MATH()
+    print(data[0])
