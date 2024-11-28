@@ -3,8 +3,10 @@ config = {
     'save_dir' : 'saved_models/',
     'load_dir' : 'saved_models/',
 
-    'policy_model_name' : 'meta-llama/Llama-3.2-3B-Instruct', 
-    
+    'policy_model_name' : 'meta-llama/Llama-3.2-3B-Instruct',
+
+
+    'num_rollouts': 1000,
     'batch_size' : 5,
     'total_episodes' : 100,
     'save_interval' : 10,

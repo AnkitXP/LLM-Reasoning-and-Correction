@@ -33,7 +33,3 @@ class MATH(Dataset):
         item = self.data[idx]
                 
         return item['problem'], item['solution']
-
-if __name__=='__main__':
-    data = MATH()
-    print(data[0])
