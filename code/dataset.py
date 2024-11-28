@@ -7,14 +7,16 @@ class MATH(Dataset):
     Creates the Math Dataset from the JSON files and the base for the dataloader
     """
 
-    def __init__(self, data_dir = 'data/MATH', split='train'):
-        self.data_dir = os.path.join(data_dir, split)
+    def __init__(self, split='train'):
+        parent_dir = os.path.join(os.getcwd(), os.pardir)
+        data_dir = os.path.join(parent_dir, 'data/MATH')
+        self.split_dir = os.path.join(data_dir, split)
         self.data = self.load_data()
     
     def load_data(self):
         
         data = []
-        for root, _, files in os.walk(self.data_dir):
+        for root, _, files in os.walk(self.split_dir):
             for file_name in files:
                 if file_name.endswith('.json'):
                     file_path = os.path.join(root, file_name)

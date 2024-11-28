@@ -1,10 +1,9 @@
 config = {
-    'data_dir' : 'data/MATH/',
     'save_dir' : 'saved_models/',
-    'load_dir' : 'saved_models/',
+    'load_dir' : 'saved_models/[Add Complete Path]/',
+    'log_dir' : 'logs/',
 
     'policy_model_name' : 'meta-llama/Llama-3.2-3B-Instruct',
-
 
     'num_rollouts': 1000,
     'batch_size' : 5,

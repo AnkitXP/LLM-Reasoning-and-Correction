@@ -86,4 +86,4 @@ class SCoRERolloutStorage:
                 torch.tensor([elem.second_stage_rewards for elem in elems]),
             )
 
-        return DataLoader(self, batch_size, shuffle=shuffle, collate_fn=collate_fn)
+        return DataLoader(self, batch_size, shuffle=shuffle, collate_fn=collate_fn, drop_last=True)

@@ -4,7 +4,7 @@ import numpy as np
 import random
 import os
 
-from train import train_model
+from model_runner import train_model, evaluate_model
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -33,6 +33,8 @@ if __name__ == '__main__':
     set_seed(args.seed)
 
     if args.task == 'train':
-        train_model()        
+        train_model()
+    elif args.task == 'evaluate':
+        evaluate_model()        
     else:
         raise ValueError('Invalid Task')
