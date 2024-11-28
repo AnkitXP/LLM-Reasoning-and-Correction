@@ -1,6 +1,4 @@
 import pprint
-import torch
-import numpy as np
 
 def last_boxed_only(sample):
     """

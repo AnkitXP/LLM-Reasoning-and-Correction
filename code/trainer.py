@@ -81,12 +81,13 @@ class SCoRETrainer(Trainer):
 
         for batch in dataloader:
 
-            #First stage objective function
+            # First stage objective function
+            # Need to add KL divergence for the second attempt?
             first_loss = - batch.second_stage_rewards.sum() + self.config['beta_two'] * batch.first_kl_divs.sum()
             
             #save rewards and losses
             all_first_losses.append(first_loss.item())
-            total_first_rewards += 
+            total_first_rewards += first_loss
 
             #Update parameters
             self.optimizer.zero_grad()
@@ -159,7 +160,7 @@ class SCoRETrainer(Trainer):
                                                             )
                         
             #store kl_divergence
-            first_kl_div = self.calculate_kl_divergence(first_logits, solutions_batch)
+            first_kl_div = self.calculate_kl_divergence(first_logits, ref_first_logits)
             first_kl_divs.append(first_kl_div)
             
             # decode first stage outputs
@@ -190,14 +191,14 @@ class SCoRETrainer(Trainer):
 
             # second stage kl_divergence
             
-            second_kl_div = self.calculate_kl_divergence(first_logits, solutions_batch)
+            second_kl_div = self.calculate_kl_divergence(second_logits, ref_second_logits)
             second_kl_divs.append(second_kl_div)
 
             # decode second stage outputs
             second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
 
             # calculate second stage rewards
-            second_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
+            second_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
 
             #Add all elements to the rollouts storage before pushing
             for i in range(len(problems_batch)):
