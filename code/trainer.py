@@ -1,5 +1,6 @@
 from transformers import Trainer
 from tqdm import tqdm 
+import gc
 
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -44,9 +45,10 @@ class SCoRETrainer(Trainer):
         for stage in ["Stage I", "Stage II"]:
 
             #create optimizer and scheduler for stage I and II
-            optimizer, scheduler = create_optimizer_and_scheduler(self.policy_model.model, self.optimizer_config, self.scheduler_config)
+            optimizer, scheduler = self.create_optimizer_and_scheduler(self.policy_model.model, 
+                                                                       self.optimizer_config, self.scheduler_config)
 
-            for episode in range(1, total_episodes + 1):
+            for episode in range(1, self.config['total_episodes'] + 1):
                 
                 self.policy_model.model.train()
                 
@@ -83,7 +85,7 @@ class SCoRETrainer(Trainer):
                 avg_second_attempt_reward = total_second_attempt_reward / len(self.get_dataloader())
 
                 # Update progress bar description
-                epoch_pbar.set_description(f"{stage} - Episode {episode}/{total_episodes} - Reward: {episode_reward:.4f}")
+                epoch_pbar.set_description(f"{stage} - Episode {episode}/{self.config['total_episodes']} - Reward: {episode_reward:.4f}")
 
                 # Log metrics to TensorBoard
                 self.writer.add_scalar(f'{stage}/Reward', episode_reward, episode)
@@ -100,7 +102,7 @@ class SCoRETrainer(Trainer):
         #Save Model
         self.policy_model.save_model()
 
-    def create_optimizer_and_scheduler(model, optimizer_config, scheduler_config):
+    def create_optimizer_and_scheduler(self, model, optimizer_config, scheduler_config):
         """
         Creates the optimizer and scheduler
         """
@@ -144,7 +146,7 @@ class SCoRETrainer(Trainer):
         first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
         # calculate first attempt rewards
-        first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions)
+        first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
 
         # Cleanup first attempt variables
         del first_logits, ref_first_logits, first_outputs
@@ -231,7 +233,7 @@ class SCoRETrainer(Trainer):
             for item in problems
         ]
         
-        prompts_tokenized = policy_model.tokenizer.apply_chat_template(
+        prompts_tokenized = self.policy_model.tokenizer.apply_chat_template(
                 conversation=first_messages,            
                 tools=None,                       
                 add_generation_prompt=True,       
