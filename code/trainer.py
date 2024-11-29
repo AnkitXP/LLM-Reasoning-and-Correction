@@ -11,8 +11,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from utils import last_boxed_only_string, remove_boxed
-from math_equivalence import is_equiv
+from utils import check_correct
 
 class SCoRETrainer(Trainer):
     def __init__(self, config, policy_model, reference_model, train_dataset):
@@ -270,21 +269,12 @@ class SCoRETrainer(Trainer):
         return second_messages, prompts_tokenized
 
     def compute_rewards(self, completions, solutions):
-        """
-        Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
-        
-        Returns a torch tensor of shape (len(completions), 1).
-        """        
-        rewards = []
-        for completion, solution in zip(completions, solutions):
+            """
+            Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
+            
+            Returns a torch tensor of shape (len(completions), 1).
+            """        
+            rewards = check_correct(completions, solutions)
 
-            model_answer = remove_boxed(last_boxed_only_string(completion))
-            correct_answer = remove_boxed(last_boxed_only_string(solution))
-
-            if is_equiv(model_answer, correct_answer):
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
-
-        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
-        return rewards_tensor
+            rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
+            return rewards_tensor

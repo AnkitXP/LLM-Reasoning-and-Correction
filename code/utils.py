@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import pprint
 
+from math_equivalence import is_equiv
+
 def last_boxed_only(sample):
     """
     Given a (q,a) sample, filter the answers so that they only contain 
@@ -131,3 +133,21 @@ def pad(tensors, padding_value = 0, padding_side = "right"):
         output[i][slices] = t
 
     return output
+
+def check_correct(completions, solutions):
+        """
+        Check correctness of each completion by comparing it to the solution.
+        Returns a list 
+        """        
+        correct = []
+        for completion, solution in zip(completions, solutions):
+
+            model_answer = remove_boxed(last_boxed_only_string(completion))
+            correct_answer = remove_boxed(last_boxed_only_string(solution))
+
+            if is_equiv(model_answer, correct_answer):
+                correct.append(1)
+            else:
+                correct.append(0)
+
+        return correct
