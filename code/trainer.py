@@ -1,13 +1,13 @@
 from transformers import Trainer
 from tqdm import tqdm 
 import gc
-
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
@@ -64,13 +64,13 @@ class SCoRETrainer(Trainer):
                     
                     if stage == "Stage I":
                         # Stage I : Initialization
-                        reward = torch.sum(- second_attempt_rewards + self.config['beta_two'] * first_attempt_kl_divs + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+                        reward = torch.sum(- second_attempt_rewards + self.config['beta_two'] * first_attempt_kl_divs + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs))
                     else:
                         # Stage II : Reward Shaping
                         bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
-                        reward = torch.sum(- bonus_reward - first_attempt_rewards + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+                        reward = torch.sum(- bonus_reward - first_attempt_rewards + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs))
 
-                    episode_reward += reward
+                    episode_reward += reward.item()
                     total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
                     total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
                     total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
@@ -143,7 +143,7 @@ class SCoRETrainer(Trainer):
         first_attempt_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits)
         
         # decode first attempt outputs
-        first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
+        first_decoded_completions = self.policy_model.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
         # calculate first attempt rewards
         first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
@@ -178,7 +178,7 @@ class SCoRETrainer(Trainer):
         second_attempt_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits)
 
         # decode second attempt outputs
-        second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
+        second_decoded_completions = self.policy_model.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
 
         # calculate second attempt rewards
         second_attempt_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
@@ -189,7 +189,7 @@ class SCoRETrainer(Trainer):
 
         return first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
 
-    def calculate_kl_divergence(self, policy_logit, ref_logit):
+    def calculate_kl_divergence(self, policy_logits, ref_logits):
         """
         Calculates the KL divergence between the policy model's logits and the reference model's logits.
         """
@@ -206,7 +206,7 @@ class SCoRETrainer(Trainer):
         # Compute KL divergence for the batch (without reducing across batch dimension)
         kl_div = F.kl_div(policy_log_probs, ref_probs, reduction='none')  # No reduction
         kl_div_per_sample = kl_div.sum(dim=-1).mean(dim=-1).unsqueeze(1)
-        return kl_div_per_sample
+        return kl_div_per_sample.to(self.policy_model.device)
         
     def get_dataloader(self):
         """
@@ -286,5 +286,5 @@ class SCoRETrainer(Trainer):
             else:
                 rewards.append(0.0)
 
-        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
-        return rewards_tensor
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32, requires_grad=True).unsqueeze(1)        
+        return rewards_tensor.to(self.policy_model.device)
