@@ -3,6 +3,9 @@ import torch
 from dataset import MATH
 from model import PolicyModel
 from trainer import SCoRETrainer
+from transformers import AutoTokenizer
+
+from math_equivalence import is_equiv
 
 from config import config  # Import configurations
 
@@ -32,6 +35,7 @@ def evaluate_model(model_name: str, tokenizer_name: str):
         model_name (str): The name of the model directory from which to load the saved model.
         tokenizer_name (str): The name of the tokenizer directory from which to load the tokenizer.
     """
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     print("<===================================== Testing ====================================>")
     

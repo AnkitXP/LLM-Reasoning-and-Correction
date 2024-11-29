@@ -1,5 +1,6 @@
 from transformers import Trainer
 from tqdm import tqdm 
+import os
 
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -12,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from utils import last_boxed_only_string, remove_boxed
 from math_equivalence import is_equiv
-from rolloutstorage import SCoRERolloutStorage
+from rolloutstorage import SCoRERolloutStorage, SCoRERLElement
 
 class SCoRETrainer(Trainer):
     def __init__(self, config, policy_model, reference_model, train_dataset):
@@ -48,10 +49,10 @@ class SCoRETrainer(Trainer):
             self.generate_rollouts()
             
             #initiate stage one over all the rollouts              
-            first_reward = self.stage_one_initialization()
+            first_reward, first_loss = self.stage_one_initialization()
             
             #initiate stage two over all the rollouts
-            second_reward = self.stage_two_reward_shaping()
+            second_reward, second_loss = self.stage_two_reward_shaping()
             
             # Update progress bar description
             epoch_pbar.set_description(f"Epoch {episode} - Stage 1 Reward: {first_reward:.4f}, Stage 2 Reward: {second_reward:.4f}")
@@ -148,14 +149,14 @@ class SCoRETrainer(Trainer):
 
             # First stage policy completions
             first_outputs, first_logits = self.policy_model.generate(
-                                                            tokenized_prompts['input_ids'].to(self.device), 
-                                                            tokenized_prompts['attention_mask'].to(self.device),
+                                                            tokenized_first_prompts['input_ids'].to(self.device), 
+                                                            tokenized_first_prompts['attention_mask'].to(self.device),
                                                             **self.config['gen_kwargs']
                                                             )
             # First stage reference completions
             ref_first_outputs, ref_first_logits = self.reference_model.generate(
-                                                            tokenized_prompts['input_ids'].to(self.device), 
-                                                            tokenized_prompts['attention_mask'].to(self.device),
+                                                            tokenized_first_prompts['input_ids'].to(self.device), 
+                                                            tokenized_first_prompts['attention_mask'].to(self.device),
                                                             **self.config['gen_kwargs']
                                                             )
                         
@@ -167,7 +168,7 @@ class SCoRETrainer(Trainer):
             first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
             # calculate first stage rewards
-            first_rewards = self.compute_rewards(first_decoded_completions, solutions)
+            first_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
             
             # Second stage template
             second_messages, tokenized_second_prompts = self.prepare_second_stage_input(

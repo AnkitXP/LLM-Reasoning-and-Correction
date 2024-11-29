@@ -1,3 +1,5 @@
+## From official MATH dataset repo
+
 import pprint
 
 def last_boxed_only(sample):
