@@ -84,7 +84,7 @@ class SCoRETrainer(Trainer):
 
             # First stage objective function
             # Need to add KL divergence for the second attempt?
-            first_loss = - batch.second_stage_rewards.sum() + self.config['beta_two'] * batch.first_kl_divs.sum()
+            first_loss = - batch.second_attempt_rewards.sum() + self.config['beta_two'] * batch.first_kl_divs.sum()
             
             #save rewards and losses
             all_first_losses.append(first_loss.item())
@@ -112,10 +112,10 @@ class SCoRETrainer(Trainer):
         for batch in dataloader:
             
             #Reward Shaping as mentioned in the paper
-            bonus_reward = self.config['alpha'] * (batch.second_stage_rewards - batch.first_stage_rewards)
+            bonus_reward = self.config['alpha'] * (batch.second_attempt_rewards - batch.first_attempt_rewards)
 
             # Loss as the negative of reward mentioned in the paper
-            second_loss = - bonus_reward.sum() - batch.first_stage_rewards.sum() + self.config['beta_one'] * (batch.first_kl_divs.sum() + batch.second_kl_divs.sum()) 
+            second_loss = - bonus_reward.sum() - batch.first_attempt_rewards.sum() + self.config['beta_one'] * (batch.first_kl_divs.sum() + batch.second_kl_divs.sum()) 
             
             #save rewards and losses
             all_second_losses.append(second_loss.item())
@@ -130,7 +130,7 @@ class SCoRETrainer(Trainer):
 
     def generate_rollouts(self):
         """
-        Generates rollouts for processing the training samples through the first and second stages.
+        Generates rollouts for processing the training samples through the first and second attempts.
         """
         
         #clear CUDA cache
@@ -141,19 +141,19 @@ class SCoRETrainer(Trainer):
         # Iterate over all the training samples to generate rollouts
         for problems_batch, solutions_batch in self.get_dataloader():
 
-            # First stage template
-            first_messages, tokenized_first_prompts = self.prepare_first_stage_input(
-                                                                                self.config['stage_one_prompt'], 
+            # First attempt template
+            first_messages, tokenized_first_prompts = self.prepare_first_attempt_input(
+                                                                                self.config['first_attempt_prompt'], 
                                                                                 problems_batch
                                                                                 )
 
-            # First stage policy completions
+            # First attempt policy completions
             first_outputs, first_logits = self.policy_model.generate(
                                                             tokenized_first_prompts['input_ids'].to(self.device), 
                                                             tokenized_first_prompts['attention_mask'].to(self.device),
                                                             **self.config['gen_kwargs']
                                                             )
-            # First stage reference completions
+            # First attempt reference completions
             ref_first_outputs, ref_first_logits = self.reference_model.generate(
                                                             tokenized_first_prompts['input_ids'].to(self.device), 
                                                             tokenized_first_prompts['attention_mask'].to(self.device),
@@ -163,39 +163,39 @@ class SCoRETrainer(Trainer):
             #store kl_divergence
             first_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits)
 
-            # decode first stage outputs
+            # decode first attempt outputs
             first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
-            # calculate first stage rewards
+            # calculate first attempt rewards
             first_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
             
-            # Second stage template
-            second_messages, tokenized_second_prompts = self.prepare_second_stage_input(
+            # Second attempt template
+            second_messages, tokenized_second_prompts = self.prepare_second_attempt_input(
                                                                                     first_messages, 
                                                                                     first_decoded_completions, 
-                                                                                    self.config['stage_two_prompt']
+                                                                                    self.config['second_attempt_prompt']
                                                                                     )
-            # second stage policy completions
+            # second attempt policy completions
             second_outputs, second_logits = self.policy_model.generate(
                                         tokenized_second_prompts['input_ids'].to(self.device),
                                         tokenized_second_prompts['attention_mask'].to(self.device),
                                         **self.config['gen_kwargs']
                                         )
             
-            # second stage reference completions
+            # second attempt reference completions
             ref_second_outputs, ref_second_logits = self.reference_model.generate(
                                                             tokenized_second_prompts['input_ids'].to(self.device), 
                                                             tokenized_second_prompts['attention_mask'].to(self.device),
                                                             **self.config['gen_kwargs']
                                                             )
 
-            # second stage kl_divergence
+            # second attempt kl_divergence
             second_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits)
 
-            # decode second stage outputs
+            # decode second attempt outputs
             second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
 
-            # calculate second stage rewards
+            # calculate second attempt rewards
             second_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
 
             #Add all elements to the rollouts storage before pushing
@@ -205,11 +205,11 @@ class SCoRETrainer(Trainer):
                     first_query_tensors = tokenized_first_prompts['input_ids'][i],
                     first_response_logits = first_logits[i],
                     first_response_kl_divs = first_kl_divs[i],
-                    first_stage_rewards = first_rewards[i],
+                    first_attempt_rewards = first_rewards[i],
                     second_query_tensors = tokenized_second_prompts['input_ids'][i],
                     second_response_logits = second_logits[i],
                     second_response_kl_divs = second_kl_divs[i],
-                    second_stage_rewards = second_rewards[i]
+                    second_attempt_rewards = second_rewards[i]
                 )
 
                 all_rollouts.append(rollout)
@@ -256,9 +256,9 @@ class SCoRETrainer(Trainer):
             drop_last=True
         )
 
-    def prepare_first_stage_input(self, first_prompt, problems):
+    def prepare_first_attempt_input(self, first_prompt, problems):
         """
-        Prepares input prompts for the first stage based on the provided problems and first stage prompt.
+        Prepares input prompts for the first attempt based on the provided problems and first attempt prompt.
         """
 
         first_messages = [
@@ -281,9 +281,9 @@ class SCoRETrainer(Trainer):
 
         return first_messages, prompts_tokenized
 
-    def prepare_second_stage_input(self, first_messages, first_decoded_completions, second_prompt):
+    def prepare_second_attempt_input(self, first_messages, first_decoded_completions, second_prompt):
         """
-        Prepares input prompts for the second stage based on the first stage outputs and the second prompt.
+        Prepares input prompts for the second attempt based on the first attempt outputs and the second prompt.
         """
 
         second_messages = []

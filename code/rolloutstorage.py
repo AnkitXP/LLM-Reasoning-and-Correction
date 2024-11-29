@@ -11,24 +11,24 @@ class SCoRERLElement:
     first_query_tensors: TensorType["query_size"]
     first_response_logits: TensorType["response_size", "vocab_size"]
     first_response_kl_divs: TensorType["response_size"]
-    first_stage_rewards: TensorType
+    first_attempt_rewards: TensorType
 
     second_query_tensors: TensorType["query_size" + "response_size"]
     second_response_logits: TensorType["response_size", "vocab_size"]
     second_response_kl_divs: TensorType["response_size"]
-    second_stage_rewards: TensorType
+    second_attempt_rewards: TensorType
 
 @dataclass
 class SCoRERLBatch:
     first_query_tensors: TensorType["batch_size", "query_size"]
     first_response_logits: TensorType["batch_size", "response_size", "vocab_size"]
     first_response_kl_divs: TensorType["batch_size", "response_size"]
-    first_stage_rewards: TensorType["batch_size"]
+    first_attempt_rewards: TensorType["batch_size"]
     
     second_query_tensors: TensorType["batch_size", "query_size" + "response_size"]
     second_response_logits: TensorType["batch_size", "response_size", "vocab_size"]
     second_response_kl_divs: TensorType["batch_size", "response_size"]
-    second_stage_rewards: TensorType["batch_size"]
+    second_attempt_rewards: TensorType["batch_size"]
 
 class SCoRERolloutStorage:
     def __init__(self, tokenizer):
@@ -68,7 +68,7 @@ class SCoRERolloutStorage:
                     padding_value=self.pad_token_id,
                     batch_first=True,
                 ),
-                torch.tensor([elem.first_stage_rewards for elem in elems]),
+                torch.tensor([elem.first_attempt_rewards for elem in elems]),
                 pad_sequence(
                     [elem.second_query_tensors for elem in elems],
                     padding_value=self.pad_token_id,
@@ -84,7 +84,7 @@ class SCoRERolloutStorage:
                     padding_value=self.pad_token_id,
                     batch_first=True,
                 ),
-                torch.tensor([elem.second_stage_rewards for elem in elems]),
+                torch.tensor([elem.second_attempt_rewards for elem in elems]),
             )
 
         return DataLoader(self, batch_size, shuffle=shuffle, collate_fn=collate_fn, drop_last=True)

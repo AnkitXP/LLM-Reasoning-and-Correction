@@ -24,7 +24,7 @@ config = {
             'output_scores' : True,
         },
 
-    'stage_one_prompt' : 
+    'first_attempt_prompt' : 
     
 """You are a math expert. When you respond, respond only with the Solution of the final Problem, thinking step by step. At the end of the Solution, when you give your final answer, write it in the form "Final Answer: The final answer is \\boxed{answer}. I hope it is correct." 
 
@@ -38,6 +38,6 @@ Step 2: Divide both sides by 2 to get x = 2.
 Final Answer: The final answer is \\boxed{2}. I hope it is correct.""",
 
 
-    'stage_two_prompt' : """There might be an error in the solution above because of lack of understanding of the question. Please correct the error, if any, and rewrite the solution. Only output the final solution! At the end of the Solution, when you give your final answer, write it in the form "Final Answer: The final answer is \\boxed{answer}. I hope it is correct." """,
+    'second_attempt_prompt' : """There might be an error in the solution above because of lack of understanding of the question. Please correct the error, if any, and rewrite the solution. Only output the final solution! At the end of the Solution, when you give your final answer, write it in the form "Final Answer: The final answer is \\boxed{answer}. I hope it is correct." """,
 
 }
