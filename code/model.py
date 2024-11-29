@@ -31,3 +31,13 @@ class PolicyModel():
         logits = torch.stack(outputs.scores, 1)
 
         return completions, logits
+
+    def save_model(self):
+        """
+        Saves the model based on the save intervals.
+        """
+        model_name = 'SCoRE-' + config['policy_model_name']
+        save_dir = os.path.join(config['save_dir'], model_name)
+        self.model.save_pretrained(save_dir)
+        self.tokenizer.save_pretrained(save_dir)
+        print(f'Model and Tokenizer saved to {save_dir}')

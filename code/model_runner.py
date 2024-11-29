@@ -15,7 +15,7 @@ def train_model():
     print("<===================================== Training ====================================>")
     #Instantiate Policy and Reference Models
     policy_model = PolicyModel()
-    ref_model = PolicyModel()
+    ref_model = PolicyModel().eval()
 
     #Create Dataset
     train_dataset = MATH()

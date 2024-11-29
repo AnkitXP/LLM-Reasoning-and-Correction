@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader
 
 from utils import last_boxed_only_string, remove_boxed
 from math_equivalence import is_equiv
-from rolloutstorage import SCoRERolloutStorage
 
 class SCoRETrainer(Trainer):
     def __init__(self, config, policy_model, reference_model, train_dataset):
@@ -23,228 +22,189 @@ class SCoRETrainer(Trainer):
         self.config = config
         self.policy_model = policy_model
         self.reference_model = reference_model
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.dataset = train_dataset
-        self.optimizer = AdamW(
-                                self.policy_model.model.parameters(),
-                                lr=config['lr'],
-                                betas=(0.9, 0.999),
-                                eps=config['total_episodes'],
-                                weight_decay=0.01 
-                              )
-        self.scheduler = LambdaLR(self.optimizer)
-        self.rollout_store = SCoRERolloutStorage(self.policy_model.tokenizer)
         self.writer = SummaryWriter(log_dir=self.config['log_dir'])
+        self.optimizer_config = {
+                            "lr": self.config['lr'], 
+                            "betas": (0.9, 0.999), 
+                            "eps": self.config['total_episodes'], 
+                            "weight_decay": 0.01
+                            }
+        self.scheduler_config = {
+                            "lr_lambda": lambda epoch: 0.95 ** epoch
+                            }
     
     def train(self):
         """
         Executes the training process, including rollouts, stage one initialization, and stage two reward shaping.
         """
-        epoch_pbar = tqdm(range(int(self.config['total_episodes'])), desc="Training Epochs")
 
-        for episode in range(1, int(self.config['total_episodes'])+1):
-            
-            #create rollouts for all training samples
-            self.generate_rollouts()
-            
-            #initiate stage one over all the rollouts              
-            first_reward = self.stage_one_initialization()
-            
-            #initiate stage two over all the rollouts
-            second_reward = self.stage_two_reward_shaping()
-            
-            # Update progress bar description
-            epoch_pbar.set_description(f"Epoch {episode} - Stage 1 Reward: {first_reward:.4f}, Stage 2 Reward: {second_reward:.4f}")
+        epoch_pbar = tqdm(range(int(self.config['total_episodes'])), desc="Training Episodes")
 
-            # Log losses to TensorBoard
-            self.writer.add_scalar('Reward/Stage_1', first_loss, episode)
-            self.writer.add_scalar('Reward/Stage_2', second_loss, episode)
+        for stage in ["Stage I", "Stage II"]:
 
-            #scheduler.step() for linearly decaying learning rate
-            scheduler.step()
+            #create optimizer and scheduler for stage I and II
+            optimizer, scheduler = create_optimizer_and_scheduler(self.policy_model.model, self.optimizer_config, self.scheduler_config)
 
-            if episode % self.config['save_interval'] == 0:
-                self.save_model(episode)
+            for episode in range(1, total_episodes + 1):
+                
+                self.policy_model.model.train()
+                
+                episode_reward = 0
+                total_kl_div = 0
+                total_first_attempt_reward = 0
+                total_second_attempt_reward = 0
+
+                for problems_batch, solutions_batch in self.get_dataloader():
+                    
+                    #create rollouts for batched training samples
+                    first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards = self.generate_rollouts(problems_batch, solutions_batch)
+                    
+                    if stage == "Stage I":
+                        # Stage I : Initialization
+                        reward = torch.sum(- second_attempt_rewards + self.config['beta_two'] * first_attempt_kl_divs + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+                    else:
+                        # Stage II : Reward Shaping
+                        bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
+                        reward = torch.sum(- bonus_reward - first_attempt_rewards + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+
+                    episode_reward += reward
+                    total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
+                    total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
+                    total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
+
+                    optimizer.zero_grad()
+                    reward.backward()
+                    optimizer.step()
+
+                # Statistics for Log
+                avg_kl_div = total_kl_div / len(self.get_dataloader())
+                avg_first_attempt_reward = total_first_attempt_reward / len(self.get_dataloader())
+                avg_second_attempt_reward = total_second_attempt_reward / len(self.get_dataloader())
+
+                # Update progress bar description
+                epoch_pbar.set_description(f"{stage} - Episode {episode}/{total_episodes} - Reward: {episode_reward:.4f}")
+
+                # Log metrics to TensorBoard
+                self.writer.add_scalar(f'{stage}/Reward', episode_reward, episode)
+                self.writer.add_scalar(f'{stage}/Avg_KL_Divergence', avg_kl_div, episode)
+                self.writer.add_scalar(f'{stage}/Avg_First_Attempt_Reward', avg_first_attempt_reward, episode)
+                self.writer.add_scalar(f'{stage}/Avg_Second_Attempt_Reward', avg_second_attempt_reward, episode)
+                self.writer.add_scalar(f'{stage}/Learning_Rate', scheduler.get_last_lr()[0], episode)
+
+                scheduler.step()
 
         # Close TensorBoard writer
         self.writer.close()
 
-    def stage_one_initialization(self):
+        #Save Model
+        self.policy_model.save_model()
+
+    def create_optimizer_and_scheduler(model, optimizer_config, scheduler_config):
         """
-        Performs the first stage of training, focusing on model initialization to prevent mode collapse.
+        Creates the optimizer and scheduler
         """
-        all_first_losses = []
-        total_first_rewards = 0
+        optimizer = torch.optim.AdamW(model.parameters(), **optimizer_config)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, **scheduler_config)
+        return optimizer, scheduler
 
-        dataloader = self.rollout_store.create_loader(batch_size = self.config['batch_size'], shuffle=True)
-        self.policy_model.model.train()
-
-        for batch in dataloader:
-
-            # First stage objective function
-            # Need to add KL divergence for the second attempt?
-            first_loss = - batch.second_stage_rewards.sum() + self.config['beta_two'] * batch.first_kl_divs.sum()
-            
-            #save rewards and losses
-            all_first_losses.append(first_loss.item())
-            total_first_rewards += first_loss
-
-            #Update parameters
-            self.optimizer.zero_grad()
-            first_loss.backward() 
-            self.optimizer.step()
-        
-        return total_first_rewards, sum(all_first_losses) / len(all_first_losses)
-
-    def stage_two_reward_shaping(self):        
+    def generate_rollouts(self, problems_batch, solutions_batch):
         """
-        Executes the second stage of training using reward shaping to optimize the policy model.
-        """
+        Generates rollouts for processing the training samples through the first and second attempts.
 
-        dataloader = self.rollout_store.create_loader(batch_size = self.config['batch_size'], shuffle=True)
-        self.policy_model.model.train()
-
-        all_second_losses = []
-        total_second_rewards = 0
-        total_bonus_reward = 0
-
-        for batch in dataloader:
-            
-            #Reward Shaping as mentioned in the paper
-            bonus_reward = self.config['alpha'] * (batch.second_stage_rewards - batch.first_stage_rewards)
-
-            # Loss as the negative of reward mentioned in the paper
-            second_loss = - bonus_reward.sum() - batch.first_stage_rewards.sum() + self.config['beta_one'] * (batch.first_kl_divs.sum() + batch.second_kl_divs.sum()) 
-            
-            #save rewards and losses
-            all_second_losses.append(second_loss.item())
-
-
-            #Update parameters of policy model
-            self.optimizer.zero_grad()
-            second_loss.backward()
-            self.optimizer.step()
-
-        return total_second_rewards, sum(all_second_losses) / len(all_second_losses)
-
-    def generate_rollouts(self):
-        """
-        Generates rollouts for processing the training samples through the first and second stages.
+        Returns: Tensors for first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
         """
         
         #clear CUDA cache
         torch.cuda.empty_cache()
 
-        all_rollouts = []
+        # First attempt template
+        first_messages, tokenized_first_prompts = self.prepare_first_attempt_input(
+                                                                            self.config['first_attempt_prompt'], 
+                                                                            problems_batch
+                                                                            )
 
-        # Iterate over all the training samples to generate rollouts
-        for problems_batch, solutions_batch in self.get_dataloader():
+        # First attempt policy completions
+        first_outputs, first_logits = self.policy_model.generate(
+                                                        tokenized_first_prompts['input_ids'].to(self.policy_model.device), 
+                                                        tokenized_first_prompts['attention_mask'].to(self.policy_model.device),
+                                                        **self.config['gen_kwargs']
+                                                        )
+        # First attempt reference completions
+        _, ref_first_logits = self.reference_model.generate(
+                                                        tokenized_first_prompts['input_ids'].to(self.reference_model.device), 
+                                                        tokenized_first_prompts['attention_mask'].to(self.reference_model.device),
+                                                        **self.config['gen_kwargs']
+                                                        )
+                    
+        #store kl_divergence
+        first_attempt_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits)
+        
+        # decode first attempt outputs
+        first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
-            # First stage template
-            first_messages, tokenized_first_prompts = self.prepare_first_stage_input(
-                                                                                self.config['stage_one_prompt'], 
-                                                                                problems_batch
-                                                                                )
+        # calculate first attempt rewards
+        first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions)
 
-            # First stage policy completions
-            first_outputs, first_logits = self.policy_model.generate(
-                                                            tokenized_prompts['input_ids'].to(self.device), 
-                                                            tokenized_prompts['attention_mask'].to(self.device),
-                                                            **self.config['gen_kwargs']
-                                                            )
-            # First stage reference completions
-            ref_first_outputs, ref_first_logits = self.reference_model.generate(
-                                                            tokenized_prompts['input_ids'].to(self.device), 
-                                                            tokenized_prompts['attention_mask'].to(self.device),
-                                                            **self.config['gen_kwargs']
-                                                            )
-                        
-            #store kl_divergence
-            first_kl_div = self.calculate_kl_divergence(first_logits, ref_first_logits)
-            first_kl_divs.append(first_kl_div)
-            
-            # decode first stage outputs
-            first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
+        # Cleanup first attempt variables
+        del first_logits, ref_first_logits, first_outputs
+        torch.cuda.empty_cache()
+        
+        # Second attempt template
+        _, tokenized_second_prompts = self.prepare_second_attempt_input(
+                                                                    first_messages, 
+                                                                    first_decoded_completions, 
+                                                                    self.config['second_attempt_prompt']
+                                                                    )
+        # second attempt policy completions
+        second_outputs, second_logits = self.policy_model.generate(
+                                    tokenized_second_prompts['input_ids'].to(self.policy_model.device),
+                                    tokenized_second_prompts['attention_mask'].to(self.policy_model.device),
+                                    **self.config['gen_kwargs']
+                                    )
+        
+        # second attempt reference completions
+        _, ref_second_logits = self.reference_model.generate(
+                                                        tokenized_second_prompts['input_ids'].to(self.reference_model.device), 
+                                                        tokenized_second_prompts['attention_mask'].to(self.reference_model.device),
+                                                        **self.config['gen_kwargs']
+                                                        )
 
-            # calculate first stage rewards
-            first_rewards = self.compute_rewards(first_decoded_completions, solutions)
-            
-            # Second stage template
-            second_messages, tokenized_second_prompts = self.prepare_second_stage_input(
-                                                                                    first_messages, 
-                                                                                    first_decoded_completions, 
-                                                                                    self.config['stage_two_prompt']
-                                                                                    )
-            # second stage policy completions
-            second_outputs, second_logits = self.policy_model.generate(
-                                        tokenized_second_prompts['input_ids'].to(self.device),
-                                        tokenized_second_prompts['attention_mask'].to(self.device),
-                                        **self.config['gen_kwargs']
-                                        )
-            
-            # second stage reference completions
-            ref_second_outputs, ref_second_logits = self.reference_model.generate(
-                                                            tokenized_second_prompts['input_ids'].to(self.device), 
-                                                            tokenized_second_prompts['attention_mask'].to(self.device),
-                                                            **self.config['gen_kwargs']
-                                                            )
+        del tokenized_second_prompts, first_messages, first_decoded_completions
 
-            # second stage kl_divergence
-            
-            second_kl_div = self.calculate_kl_divergence(second_logits, ref_second_logits)
-            second_kl_divs.append(second_kl_div)
+        # second attempt kl_divergence   
+        second_attempt_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits)
 
-            # decode second stage outputs
-            second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
+        # decode second attempt outputs
+        second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
 
-            # calculate second stage rewards
-            second_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
+        # calculate second attempt rewards
+        second_attempt_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
 
-            #Add all elements to the rollouts storage before pushing
-            for i in range(len(problems_batch)):
-                
-                rollout = SCoRERLElement(
-                    first_query_tensors = tokenized_first_prompts['input_ids'][i],
-                    first_response_logits = first_logits[i],
-                    first_response_kl_divs = first_kl_divs[i],
-                    first_stage_rewards = first_rewards[i],
-                    second_query_tensors = tokenized_second_prompts['input_ids'][i],
-                    second_response_logits = second_logits[i],
-                    second_response_kl_divs = second_kl_divs[i],
-                    second_stage_rewards = second_rewards[i]
-                )
+        # Cleanup second attempt variables
+        del second_logits, ref_second_logits, second_outputs, second_decoded_completions
+        gc.collect()
 
-                all_rollouts.append(rollout)
-                print(f'Rollout {i}: {rollout}')
-
-        # Add all rollouts to the rollout storage
-        self.rollout_store.push(all_rollouts)
-        del all_rollouts
+        return first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
 
     def calculate_kl_divergence(self, policy_logit, ref_logit):
         """
         Calculates the KL divergence between the policy model's logits and the reference model's logits.
         """
 
-        kl_divs = []
+        if policy_logits.size(1) < ref_logits.size(1):
+            policy_logits = F.pad(policy_logits, (0, 0, 0, ref_logits.size(1) - policy_logits.size(1)), mode='constant', value=0)
+        elif ref_logits.size(1) < policy_logits.size(1):
+            ref_logits = F.pad(ref_logits, (0, 0, 0, policy_logits.size(1) - ref_logits.size(1)), mode='constant', value=0)
 
-        for i in range(policy_logit.shape[0]):
-            
-            #Padding if the logit tensors are not of equal length
-            if policy_logit.size(1) < ref_logit.size(1):
-                policy_logit = F.pad(policy_logit, (0, 0, 0, ref_logit.size(1) - policy_logit.size(1)), mode='constant', value=0)
-            elif ref_logit.size(1) < policy_logit.size(1):
-                ref_logit = F.pad(ref_logit, (0, 0, 0, policy_logit.size(1) - ref_logit.size(1)), mode='constant', value=0)
+        # Convert logits to probabilities and log probabilities
+        policy_log_probs = F.log_softmax(policy_logits, dim=-1)
+        ref_probs = F.softmax(ref_logits, dim=-1)
 
-            # Apply log_softmax to policy_logit and softmax to ref_logit
-            log_probs1 = F.log_softmax(policy_logit, dim=-1)
-            probs2 = F.softmax(ref_logit, dim=-1)
-            
-            # Calculate KL divergence and append to the list
-            kl_div = F.kl_div(log_probs1, probs2, reduction='sum')
-            kl_divs.append(kl_div)
-        
-        return kl_divs
+        # Compute KL divergence for the batch (without reducing across batch dimension)
+        kl_div = F.kl_div(policy_log_probs, ref_probs, reduction='none')  # No reduction
+        kl_div_per_sample = kl_div.sum(dim=-1).mean(dim=-1).unsqueeze(1)
+        return kl_div_per_sample
         
     def get_dataloader(self):
         """
@@ -258,9 +218,9 @@ class SCoRETrainer(Trainer):
             drop_last=True
         )
 
-    def prepare_first_stage_input(self, first_prompt, problems):
+    def prepare_first_attempt_input(self, first_prompt, problems):
         """
-        Prepares input prompts for the first stage based on the provided problems and first stage prompt.
+        Prepares input prompts for the first attempt based on the provided problems and first attempt prompt.
         """
 
         first_messages = [
@@ -283,9 +243,9 @@ class SCoRETrainer(Trainer):
 
         return first_messages, prompts_tokenized
 
-    def prepare_second_stage_input(self, first_messages, first_decoded_completions, second_prompt):
+    def prepare_second_attempt_input(self, first_messages, first_decoded_completions, second_prompt):
         """
-        Prepares input prompts for the second stage based on the first stage outputs and the second prompt.
+        Prepares input prompts for the second attempt based on the first attempt outputs and the second attempt prompt.
         """
 
         second_messages = []
@@ -310,6 +270,8 @@ class SCoRETrainer(Trainer):
     def compute_rewards(self, completions, solutions):
         """
         Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
+        
+        Returns a torch tensor of shape (len(completions), 1).
         """        
         rewards = []
         for completion, solution in zip(completions, solutions):
@@ -318,16 +280,9 @@ class SCoRETrainer(Trainer):
             correct_answer = remove_boxed(last_boxed_only_string(solution))
 
             if is_equiv(model_answer, correct_answer):
-                rewards.append(1)
+                rewards.append(1.0)
             else:
-                rewards.append(0)
-        
-        return rewards
+                rewards.append(0.0)
 
-    def save_model(self, episode):
-        """
-        Saves the model based on the save intervals.
-        """
-        model_name = 'SCoRE-'+self.config['policy_model_name']+'-Episodes-'+str(episode)
-        save_dir = os.path.join(self.config['save_dir'], model_name)
-        self.model.save_pretrained(save_dir)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
+        return rewards_tensor
