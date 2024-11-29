@@ -1,5 +1,6 @@
 ## From official MATH dataset repo
-
+import numpy as np
+import torch
 import pprint
 
 def last_boxed_only(sample):

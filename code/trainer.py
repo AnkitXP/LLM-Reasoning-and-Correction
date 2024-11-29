@@ -62,7 +62,7 @@ class SCoRETrainer(Trainer):
             self.writer.add_scalar('Reward/Stage_2', second_loss, episode)
 
             #scheduler.step() for linearly decaying learning rate
-            scheduler.step()
+            self.scheduler.step()
 
             if episode % self.config['save_interval'] == 0:
                 self.save_model(episode)
@@ -161,9 +161,8 @@ class SCoRETrainer(Trainer):
                                                             )
                         
             #store kl_divergence
-            first_kl_div = self.calculate_kl_divergence(first_logits, ref_first_logits)
-            first_kl_divs.append(first_kl_div)
-            
+            first_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits)
+
             # decode first stage outputs
             first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
@@ -191,9 +190,7 @@ class SCoRETrainer(Trainer):
                                                             )
 
             # second stage kl_divergence
-            
-            second_kl_div = self.calculate_kl_divergence(second_logits, ref_second_logits)
-            second_kl_divs.append(second_kl_div)
+            second_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits)
 
             # decode second stage outputs
             second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
@@ -272,7 +269,7 @@ class SCoRETrainer(Trainer):
             for item in problems
         ]
         
-        prompts_tokenized = policy_model.tokenizer.apply_chat_template(
+        prompts_tokenized = self.policy_model.tokenizer.apply_chat_template(
                 conversation=first_messages,            
                 tools=None,                       
                 add_generation_prompt=True,       

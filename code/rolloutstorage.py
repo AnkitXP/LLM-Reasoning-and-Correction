@@ -4,6 +4,7 @@ from typing import Iterable
 
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
+import torch
 
 @dataclass
 class SCoRERLElement:
