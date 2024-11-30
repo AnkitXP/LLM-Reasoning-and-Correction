@@ -5,7 +5,9 @@ config = {
 
     'policy_model_name' : 'meta-llama/Llama-3.2-1B-Instruct',
 
-    'batch_size' : 64,
+    'batch_size' : 16,
+    'gradient_accumulation_steps': 8,
+    'mixed_precision': True,
     'total_episodes' : 100,
     'save_interval' : 20,
     'alpha': 10,

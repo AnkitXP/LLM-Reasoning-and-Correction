@@ -13,6 +13,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler, autocast
 
 from utils import last_boxed_only_string, remove_boxed
 from math_equivalence import is_equiv
@@ -24,7 +25,12 @@ class SCoRETrainer(Trainer):
         """
 
         self.config = config
+
+        policy_model.model.requires_grad_(True)
         self.policy_model = policy_model
+
+        reference_model.model.requires_grad_(False)
+        reference_model.model = reference_model.model.eval()
         self.reference_model = reference_model
         self.dataset = train_dataset
         self.writer = SummaryWriter(log_dir=self.config['log_dir'])
@@ -42,14 +48,23 @@ class SCoRETrainer(Trainer):
         """
         Executes the training process, including rollouts, stage one initialization, and stage two reward shaping.
         """
+
+        accumulation_steps = self.config['gradient_accumulation_steps']
         total_batches = len(self.get_dataloader()) * self.config['total_episodes']
+        accumulated_batch_size = self.config['batch_size'] * accumulation_steps
         epoch_pbar = tqdm(total=total_batches, desc="Training Progress")
 
         for stage in ["Stage I", "Stage II"]:
 
+            # Initialize scaler for mixed precision
+            scaler = GradScaler()
+
             #create optimizer and scheduler for stage I and II
-            optimizer, scheduler = self.create_optimizer_and_scheduler(self.policy_model.model, 
-                                                                       self.optimizer_config, self.scheduler_config)
+            optimizer, scheduler = self.create_optimizer_and_scheduler(
+                                                                    self.policy_model.model, 
+                                                                    self.optimizer_config, 
+                                                                    self.scheduler_config
+                                                                    )
 
             for episode in range(1, self.config['total_episodes'] + 1):
                 
@@ -60,38 +75,54 @@ class SCoRETrainer(Trainer):
                 total_first_attempt_reward = 0
                 total_second_attempt_reward = 0
 
-                for problems_batch, solutions_batch in self.get_dataloader():
-                    
-                    #create rollouts for batched training samples
-                    first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards = self.generate_rollouts(problems_batch, solutions_batch)
-                    
-                    if stage == "Stage I":
-                        # Stage I : Initialization
-                        reward = torch.sum(
-                            - second_attempt_rewards 
-                            + self.config['beta_two'] * first_attempt_kl_divs 
-                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
-                            )
-                    else:
-                        # Stage II : Reward Shaping
-                        bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
-                        reward = torch.sum(
-                            - bonus_reward 
-                            - first_attempt_rewards 
-                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
-                            )
-
-                    episode_reward += reward.item()
-                    total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
-                    total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
-                    total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
+                for batch_idx, (problems_batch, solutions_batch) in enumerate(self.get_dataloader()):
 
                     optimizer.zero_grad()
-                    reward.backward()
-                    optimizer.step()
 
-                    # Update progress bar after every batch
-                    epoch_pbar.update(1)
+                    # Mixed precision for memory optimization
+                    with autocast(enabled=self.config['mixed_precision']):
+                        
+                        #create rollouts for batched training samples
+                        first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards = self.generate_rollouts(problems_batch, solutions_batch)
+                        
+                        if stage == "Stage I":
+                            # Stage I : Initialization
+                            reward = torch.sum(
+                                - second_attempt_rewards 
+                                + self.config['beta_two'] * first_attempt_kl_divs 
+                                + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                                )
+                        else:
+                            # Stage II : Reward Shaping
+                            bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
+                            reward = torch.sum(
+                                - bonus_reward 
+                                - first_attempt_rewards 
+                                + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                                )
+
+                        episode_reward += reward.item()
+                        total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
+                        total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
+                        total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
+
+                        del first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                        reward.requires_grad_(True)
+                        reward = reward.to(self.policy_model.device)
+                        reward = reward / accumulation_steps
+                        scaler.scale(reward).backward()
+
+                        # Update progress bar after every batch
+                        epoch_pbar.update(1)
+
+                        # Accumulate gradients and perform optimization step
+                        if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.get_dataloader()):
+                            scaler.step(optimizer)
+                            scaler.update()
+                            optimizer.zero_grad()
 
                 # Statistics for Log
                 avg_kl_div = total_kl_div / len(self.get_dataloader())
@@ -107,7 +138,8 @@ class SCoRETrainer(Trainer):
                 self.writer.add_scalar(f'{stage}/Avg_First_Attempt_Reward', avg_first_attempt_reward, episode)
                 self.writer.add_scalar(f'{stage}/Avg_Second_Attempt_Reward', avg_second_attempt_reward, episode)
                 self.writer.add_scalar(f'{stage}/Learning_Rate', scheduler.get_last_lr()[0], episode)
-
+                
+                # Decay Learning Rate after every episode
                 scheduler.step()
 
         # Close TensorBoard writer
