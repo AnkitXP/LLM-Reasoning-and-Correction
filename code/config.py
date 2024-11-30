@@ -3,12 +3,11 @@ config = {
     'load_dir' : 'saved_models/[Add Complete Path]/',
     'log_dir' : 'logs/',
 
-    'policy_model_name' : 'meta-llama/Llama-3.2-3B-Instruct',
+    'policy_model_name' : 'meta-llama/Llama-3.2-1B-Instruct',
 
-    'num_rollouts': 1000,
-    'batch_size' : 5,
+    'batch_size' : 64,
     'total_episodes' : 100,
-    'save_interval' : 10,
+    'save_interval' : 20,
     'alpha': 10,
     'beta_one': 0.01,
     'beta_two': 0.1,

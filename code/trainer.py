@@ -1,13 +1,16 @@
+import transformers
+transformers.logging.set_verbosity_error()
+
 from transformers import Trainer
 from tqdm import tqdm 
 import gc
-
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
@@ -38,8 +41,8 @@ class SCoRETrainer(Trainer):
         """
         Executes the training process, including rollouts, stage one initialization, and stage two reward shaping.
         """
-
-        epoch_pbar = tqdm(range(int(self.config['total_episodes'])), desc="Training Episodes")
+        total_batches = len(self.get_dataloader()) * self.config['total_episodes']
+        epoch_pbar = tqdm(total=total_batches, desc="Training Progress")
 
         for stage in ["Stage I", "Stage II"]:
 
@@ -63,13 +66,21 @@ class SCoRETrainer(Trainer):
                     
                     if stage == "Stage I":
                         # Stage I : Initialization
-                        reward = torch.sum(- second_attempt_rewards + self.config['beta_two'] * first_attempt_kl_divs + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+                        reward = torch.sum(
+                            - second_attempt_rewards 
+                            + self.config['beta_two'] * first_attempt_kl_divs 
+                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                            )
                     else:
                         # Stage II : Reward Shaping
                         bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
-                        reward = torch.sum(- bonus_reward - first_attempt_rewards + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)).item()
+                        reward = torch.sum(
+                            - bonus_reward 
+                            - first_attempt_rewards 
+                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                            )
 
-                    episode_reward += reward
+                    episode_reward += reward.item()
                     total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
                     total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
                     total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
@@ -77,6 +88,9 @@ class SCoRETrainer(Trainer):
                     optimizer.zero_grad()
                     reward.backward()
                     optimizer.step()
+
+                    # Update progress bar after every batch
+                    epoch_pbar.update(1)
 
                 # Statistics for Log
                 avg_kl_div = total_kl_div / len(self.get_dataloader())
@@ -142,7 +156,7 @@ class SCoRETrainer(Trainer):
         first_attempt_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits)
         
         # decode first attempt outputs
-        first_decoded_completions = self.policy.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
+        first_decoded_completions = self.policy_model.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
         # calculate first attempt rewards
         first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
@@ -177,7 +191,7 @@ class SCoRETrainer(Trainer):
         second_attempt_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits)
 
         # decode second attempt outputs
-        second_decoded_completions = self.policy.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
+        second_decoded_completions = self.policy_model.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
 
         # calculate second attempt rewards
         second_attempt_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
@@ -188,7 +202,7 @@ class SCoRETrainer(Trainer):
 
         return first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
 
-    def calculate_kl_divergence(self, policy_logit, ref_logit):
+    def calculate_kl_divergence(self, policy_logits, ref_logits):
         """
         Calculates the KL divergence between the policy model's logits and the reference model's logits.
         """
@@ -205,7 +219,7 @@ class SCoRETrainer(Trainer):
         # Compute KL divergence for the batch (without reducing across batch dimension)
         kl_div = F.kl_div(policy_log_probs, ref_probs, reduction='none')  # No reduction
         kl_div_per_sample = kl_div.sum(dim=-1).mean(dim=-1).unsqueeze(1)
-        return kl_div_per_sample
+        return kl_div_per_sample.to(self.policy_model.device)
         
     def get_dataloader(self):
         """
@@ -220,12 +234,12 @@ class SCoRETrainer(Trainer):
         )
 
     def compute_rewards(self, completions, solutions):
-            """
-            Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
-            
-            Returns a torch tensor of shape (len(completions), 1).
-            """        
-            rewards = check_correct(completions, solutions)
+        """
+        Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
 
-            rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
-            return rewards_tensor
+        Returns a torch tensor of shape (len(completions), 1).
+        """        
+        rewards = check_correct(completions, solutions)
+
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
+        return rewards_tensor

@@ -1,5 +1,7 @@
 import torch
 import os
+import transformers
+transformers.logging.set_verbosity_error()
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from config import config
 
@@ -11,7 +13,9 @@ class PolicyModel():
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = AutoModelForCausalLM.from_pretrained(config['policy_model_name']).to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(config['policy_model_name'])
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+            self.model.config.pad_token_id = self.tokenizer.eos_token_id
 
     def generate(self, input_ids, attention_mask=None, **gen_kwargs):
         """
