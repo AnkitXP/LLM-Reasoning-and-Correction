@@ -4,6 +4,7 @@ import transformers
 transformers.logging.set_verbosity_error()
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from config import config
+from utils import pad
 
 class PolicyModel():
     def __init__(self):
@@ -20,21 +21,40 @@ class PolicyModel():
     def generate(self, input_ids, attention_mask=None, **gen_kwargs):
         """
         Generates only the completion and respective logits based on input length
-        """
-        outputs = self.model.generate(  
-                        input_ids=input_ids, 
-                        attention_mask=attention_mask, 
-                        **gen_kwargs
-                        )
-
-        # Extract only the completion part
-        input_length = input_ids.shape[1]
-        completions = outputs.sequences[:, input_length:]
         
-        # Stack the logits for the completion part only
-        logits = torch.stack(outputs.scores, 1)
+        Returns tensors padded responses [batch size, sequence length] and padded logits [batch size, sequence length, vocabulary size]
+        """
 
-        return completions, logits
+        responses = []
+        logitss = []
+        batch_size = input_ids.shape[0]
+
+        for i in range(0, batch_size, config['local_rollout_forward_batch_size']):
+            outputs = self.model.generate(  
+                            input_ids=input_ids, 
+                            attention_mask=attention_mask, 
+                            **gen_kwargs
+                            )
+
+            # Extract only the completion part
+            input_length = input_ids.shape[1]
+            completions = outputs.sequences[:, input_length:]
+            
+            # Stack the logits for the completion part only
+            logits = torch.stack(outputs.scores, 1)
+            
+            responses.append(completions)
+            logitss.append(logits)
+
+        # padding tensors
+        padded_responses = pad(responses, padding_value=self.tokenizer.pad_token_id, padding_side="right")
+        padded_logitss = pad(logitss, padding_value=0, padding_side="right")
+
+        # reshaping
+        padded_responses = padded_responses.view(-1, padded_responses.shape[-1])[:batch_size]
+        padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
+        
+        return padded_responses, padded_logitss
     
     def prepare_first_attempt_input(self, first_prompt, problems):
         """
