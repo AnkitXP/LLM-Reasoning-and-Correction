@@ -1,5 +1,6 @@
 import torch
 import os
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import transformers
 transformers.logging.set_verbosity_error()
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -12,8 +13,13 @@ class PolicyModel():
         Initialize the policy model and tokenizer
         """
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model = AutoModelForCausalLM.from_pretrained(config['policy_model_name']).to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(config['policy_model_name'])
+        parent_dir = os.path.join(os.getcwd(), os.pardir)
+        model_dir = os.path.join(parent_dir, config['model_dir'])
+        model_path = os.path.join(model_dir, config['policy_model_name'])
+        
+        self.model = AutoModelForCausalLM.from_pretrained(model_path).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self.model.config.pad_token_id = self.tokenizer.eos_token_id
@@ -109,8 +115,9 @@ class PolicyModel():
         """
         Saves the model based on the save intervals.
         """
-        model_name = 'SCoRE-' + config['policy_model_name']
-        save_dir = os.path.join(config['save_dir'], model_name)
+        model_dir = config['save_dir']+'/SCoRE-' + config['policy_model_name']
+        parent_dir = os.path.join(os.getcwd(), os.pardir)
+        save_dir = os.path.join(parent_dir, model_dir)
         self.model.save_pretrained(save_dir)
         self.tokenizer.save_pretrained(save_dir)
         print(f'Model and Tokenizer saved to {save_dir}')

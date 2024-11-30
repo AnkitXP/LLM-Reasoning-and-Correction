@@ -5,6 +5,8 @@ import random
 import os
 
 from model_runner import train_model, evaluate_model
+from base_downloader import download_and_save_model
+from config import config
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -20,8 +22,6 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--task', type=str,
                         help='name of this task: train/generate', required=True)
-    parser.add_argument('--seed', type=int, default=44,
-                        help="seed", required=False)
     return parser.parse_args()
     
 if __name__ == '__main__':
@@ -30,9 +30,10 @@ if __name__ == '__main__':
 
     args = parse_arguments()
 
-    set_seed(args.seed)
+    set_seed(config['seed'])
 
     if args.task == 'train':
+        download_and_save_model(config['policy_model_name'], config['model_dir'])
         train_model()
     elif args.task == 'evaluate':
         evaluate_model()        

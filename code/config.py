@@ -1,10 +1,12 @@
 config = {
+    'model_dir' : 'base_models/',
     'save_dir' : 'saved_models/',
     'load_dir' : 'saved_models/[Add Complete Path]/',
     'log_dir' : 'logs/',
 
-    'policy_model_name' : 'meta-llama/Llama-3.2-1B-Instruct',
+    'policy_model_name' : 'ai-nexuz/llama-3.2-1b-instruct-fine-tuned',
 
+    'seed' : 44,
     'batch_size' : 2,
     'local_rollout_forward_batch_size': 1,
     'gradient_accumulation_steps': 1,

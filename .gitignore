@@ -4,3 +4,4 @@ code/__pycache__/
 code/data/
 code/saved_models/
 logs/
+base_models/
