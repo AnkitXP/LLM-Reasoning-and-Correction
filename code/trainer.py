@@ -14,8 +14,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from utils import last_boxed_only_string, remove_boxed
-from math_equivalence import is_equiv
+from utils import check_correct
 
 class SCoRETrainer(Trainer):
     def __init__(self, config, policy_model, reference_model, train_dataset):
@@ -135,7 +134,7 @@ class SCoRETrainer(Trainer):
         torch.cuda.empty_cache()
 
         # First attempt template
-        first_messages, tokenized_first_prompts = self.prepare_first_attempt_input(
+        first_messages, tokenized_first_prompts = self.policy_model.prepare_first_attempt_input(
                                                                             self.config['first_attempt_prompt'], 
                                                                             problems_batch
                                                                             )
@@ -167,7 +166,7 @@ class SCoRETrainer(Trainer):
         torch.cuda.empty_cache()
         
         # Second attempt template
-        _, tokenized_second_prompts = self.prepare_second_attempt_input(
+        _, tokenized_second_prompts = self.policy_model.prepare_second_attempt_input(
                                                                     first_messages, 
                                                                     first_decoded_completions, 
                                                                     self.config['second_attempt_prompt']
@@ -234,71 +233,13 @@ class SCoRETrainer(Trainer):
             drop_last=True
         )
 
-    def prepare_first_attempt_input(self, first_prompt, problems):
-        """
-        Prepares input prompts for the first attempt based on the provided problems and first attempt prompt.
-        """
-
-        first_messages = [
-            [
-                {"role":"system", "content": first_prompt}, 
-                {"role":"user", "content": item}
-            ] 
-            for item in problems
-        ]
-        
-        prompts_tokenized = self.policy_model.tokenizer.apply_chat_template(
-                conversation=first_messages,            
-                tools=None,                       
-                add_generation_prompt=True,       
-                return_dict=True,                 
-                padding=True,
-                truncation=True,                 
-                return_tensors="pt"               
-            )
-
-        return first_messages, prompts_tokenized
-
-    def prepare_second_attempt_input(self, first_messages, first_decoded_completions, second_prompt):
-        """
-        Prepares input prompts for the second attempt based on the first attempt outputs and the second attempt prompt.
-        """
-
-        second_messages = []
-        for first_message, first_completion in zip(first_messages, first_decoded_completions):
-            second_message = first_message.copy()
-            second_message.append({"role": "assistant", "content": first_completion})
-            second_message.append({"role": "user", "content": second_prompt})
-            second_messages.append(second_message)
-        
-        prompts_tokenized = self.policy_model.tokenizer.apply_chat_template(
-            conversation=second_messages,
-            tools=None,
-            add_generation_prompt=True,
-            return_dict=True,
-            padding=True,
-            truncation=True,
-            return_tensors="pt"
-        )
-
-        return second_messages, prompts_tokenized
-
     def compute_rewards(self, completions, solutions):
         """
         Computes the rewards for each completion by comparing it to the reference solution using equivalence checks.
-        
+
         Returns a torch tensor of shape (len(completions), 1).
         """        
-        rewards = []
-        for completion, solution in zip(completions, solutions):
+        rewards = check_correct(completions, solutions)
 
-            model_answer = remove_boxed(last_boxed_only_string(completion))
-            correct_answer = remove_boxed(last_boxed_only_string(solution))
-
-            if is_equiv(model_answer, correct_answer):
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
-
-        rewards_tensor = torch.tensor(rewards, dtype=torch.float32, requires_grad=True).unsqueeze(1)        
-        return rewards_tensor.to(self.policy_model.device)
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
+        return rewards_tensor

@@ -3,10 +3,9 @@ import torch
 from dataset import MATH
 from model import PolicyModel
 from trainer import SCoRETrainer
-from transformers import AutoTokenizer
+import gc
 
-from math_equivalence import is_equiv
-
+from utils import check_correct
 from config import config  # Import configurations
 
 def train_model():
@@ -27,61 +26,101 @@ def train_model():
     trainer = SCoRETrainer(config, policy_model, ref_model, train_dataset)
     trainer.train()
 
-def evaluate_model(model_name: str, tokenizer_name: str):
+def evaluate_model():
     """
     Evaluates the trained model on the test dataset.
-
-    Args:
-        model_name (str): The name of the model directory from which to load the saved model.
-        tokenizer_name (str): The name of the tokenizer directory from which to load the tokenizer.
     """
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
     print("<===================================== Testing ====================================>")
     
     # Load the test dataset
     print("Loading the test dataset...")
     test_dataset = MATH(split='test')  # Assuming MATH dataset follows Hugging Face's Dataset structure.
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
     # Load the saved policy model
-    print(f"Loading model from {model_name}...")
-    policy_model = PolicyModel.from_pretrained(model_name)
-    policy_model.to(device)
-    policy_model.eval()
+    print(f"Loading model from {config['policy_model_name']}...")
+    policy_model = PolicyModel()
 
     # Create DataLoader for the test dataset
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=16, shuffle=False)
 
-    predictions, references = [], []
+    t1_correct = []
+    t2_correct = []
 
     with torch.no_grad():
-        for batch in test_dataloader:
+        for problems_batch, solutions_batch in test_dataloader:
             # Prepare inputs
-            inputs = tokenizer(batch['problem'], padding=True, truncation=True, return_tensors="pt")
-            inputs = {key: value.to(device) for key, value in inputs.items()}
+            # First attempt template
+            first_messages, tokenized_first_prompts = policy_model.prepare_first_attempt_input(
+                                                                                config['first_attempt_prompt'], 
+                                                                                problems_batch
+                                                                                )
 
-            # Generate model outputs
-            outputs = policy_model.generate(**inputs)
-            decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            predictions.extend(decoded_outputs)
+            # First attempt policy completions
+            first_outputs, _ = policy_model.generate(
+                                                    tokenized_first_prompts['input_ids'].to(policy_model.device), 
+                                                    tokenized_first_prompts['attention_mask'].to(policy_model.device),
+                                                    **config['gen_kwargs']
+                                                    )
+                        
+            
+            # decode first attempt outputs
+            first_decoded_completions = policy_model.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
 
-            # Store references for evaluation
-            references.extend(batch['solution'])  # Assuming test_dataset includes 'solution'
+            # check first attempt correctness
+            t1_correct.extend(check_correct(first_decoded_completions, solutions_batch))
+
+            # Cleanup first attempt variables
+            del _, first_outputs
+            torch.cuda.empty_cache()
+            
+            # Second attempt template
+            _, tokenized_second_prompts = policy_model.prepare_second_attempt_input(
+                                                                        first_messages, 
+                                                                        first_decoded_completions, 
+                                                                        config['second_attempt_prompt']
+                                                                        )
+            # second attempt policy completions
+            second_outputs, second_logits = policy_model.generate(
+                                        tokenized_second_prompts['input_ids'].to(policy_model.device),
+                                        tokenized_second_prompts['attention_mask'].to(policy_model.device),
+                                        **config['gen_kwargs']
+                                        )
+    
+
+            del _, tokenized_second_prompts, first_messages, first_decoded_completions
+
+            # decode second attempt outputs
+            second_decoded_completions = policy_model.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
+
+            # check second attempt correctness
+            t2_correct.extend(check_correct(second_decoded_completions, solutions_batch))
+
+            # Cleanup second attempt variables
+            del _, second_logits, second_outputs, second_decoded_completions
+            gc.collect()
 
     # Evaluate predictions using an equivalence check or accuracy metric
     print("Calculating evaluation metrics...")
-    correct = sum(1 for pred, ref in zip(predictions, references) if is_equiv(pred, ref))
-    total = len(references)
-    accuracy = correct / total * 100
 
-    # Log the results
+    total = len(t1_correct)
+
+    # Attempt 1 and 2 accuracy
+    t1_acc = sum(t1_correct) / total * 100    
+    t2_acc = sum(t2_correct) / total * 100
+
+    delta = t2_acc - t1_acc
+
+    # TODO:Log the results?
     metrics = {
-        "accuracy": accuracy,
-        "correct": correct,
-        "total": total
+        "t1_accuracy": t1_acc,
+        "t2_accuracy": t2_acc,
+        "t1_correct" : t1_correct,
+        "t2_correct" : t2_correct,
+        "t1_t2_delta": delta,
+        "total"      : total
     }
 
-    print(f"Evaluation Metrics:\nAccuracy: {accuracy:.2f}% ({correct}/{total})")
+    print(f"Evaluation Metrics:\nFirst attempt accuracy: {t1_acc:.2f}% ({t1_correct}/{total})")
+    print(f"Final Accuracy: {t2_acc:.2f}% ({t2_correct}/{total})")
     
     
