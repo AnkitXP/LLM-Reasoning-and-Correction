@@ -35,6 +35,55 @@ class PolicyModel():
         logits = torch.stack(outputs.scores, 1)
 
         return completions, logits
+    
+    def prepare_first_attempt_input(self, first_prompt, problems):
+        """
+        Prepares input prompts for the first attempt based on the provided problems and first attempt prompt.
+        """
+
+        first_messages = [
+            [
+                {"role":"system", "content": first_prompt}, 
+                {"role":"user", "content": item}
+            ] 
+            for item in problems
+        ]
+        
+        prompts_tokenized = self.tokenizer.apply_chat_template(
+                conversation=first_messages,            
+                tools=None,                       
+                add_generation_prompt=True,       
+                return_dict=True,                 
+                padding=True,
+                truncation=True,                 
+                return_tensors="pt"               
+            )
+
+        return first_messages, prompts_tokenized
+
+    def prepare_second_attempt_input(self, first_messages, first_decoded_completions, second_prompt):
+        """
+        Prepares input prompts for the second attempt based on the first attempt outputs and the second attempt prompt.
+        """
+
+        second_messages = []
+        for first_message, first_completion in zip(first_messages, first_decoded_completions):
+            second_message = first_message.copy()
+            second_message.append({"role": "assistant", "content": first_completion})
+            second_message.append({"role": "user", "content": second_prompt})
+            second_messages.append(second_message)
+        
+        prompts_tokenized = self.tokenizer.apply_chat_template(
+            conversation=second_messages,
+            tools=None,
+            add_generation_prompt=True,
+            return_dict=True,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        )
+
+        return second_messages, prompts_tokenized
 
     def save_model(self):
         """
