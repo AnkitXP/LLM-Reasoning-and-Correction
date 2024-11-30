@@ -273,5 +273,5 @@ class SCoRETrainer(Trainer):
         """        
         rewards = check_correct(completions, solutions)
 
-        rewards_tensor = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1)        
-        return rewards_tensor
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float32, requires_grad = True).unsqueeze(1)        
+        return rewards_tensor.to(self.policy_model.device)
