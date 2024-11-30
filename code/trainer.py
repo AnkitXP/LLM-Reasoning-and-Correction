@@ -1,3 +1,6 @@
+import transformers
+transformers.logging.set_verbosity_error()
+
 from transformers import Trainer
 from tqdm import tqdm 
 import gc
@@ -39,8 +42,8 @@ class SCoRETrainer(Trainer):
         """
         Executes the training process, including rollouts, stage one initialization, and stage two reward shaping.
         """
-
-        epoch_pbar = tqdm(range(int(self.config['total_episodes'])), desc="Training Episodes")
+        total_batches = len(self.get_dataloader()) * self.config['total_episodes']
+        epoch_pbar = tqdm(total=total_batches, desc="Training Progress")
 
         for stage in ["Stage I", "Stage II"]:
 
@@ -64,11 +67,19 @@ class SCoRETrainer(Trainer):
                     
                     if stage == "Stage I":
                         # Stage I : Initialization
-                        reward = torch.sum(- second_attempt_rewards + self.config['beta_two'] * first_attempt_kl_divs + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs))
+                        reward = torch.sum(
+                            - second_attempt_rewards 
+                            + self.config['beta_two'] * first_attempt_kl_divs 
+                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                            )
                     else:
                         # Stage II : Reward Shaping
                         bonus_reward = self.config['alpha'] * (second_attempt_rewards - first_attempt_rewards)
-                        reward = torch.sum(- bonus_reward - first_attempt_rewards + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs))
+                        reward = torch.sum(
+                            - bonus_reward 
+                            - first_attempt_rewards 
+                            + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
+                            )
 
                     episode_reward += reward.item()
                     total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
@@ -78,6 +89,9 @@ class SCoRETrainer(Trainer):
                     optimizer.zero_grad()
                     reward.backward()
                     optimizer.step()
+
+                    # Update progress bar after every batch
+                    epoch_pbar.update(1)
 
                 # Statistics for Log
                 avg_kl_div = total_kl_div / len(self.get_dataloader())
