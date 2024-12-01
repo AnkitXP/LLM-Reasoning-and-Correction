@@ -99,8 +99,9 @@ class SCoRETrainer(Trainer):
                     total_second_attempt_reward += torch.sum(second_attempt_rewards).item()
 
                     del first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
-                    gc.collect()
+                    # Clear CUDA cache
                     torch.cuda.empty_cache()
+                    gc.collect()
 
                     reward.requires_grad_(True)
                     reward = reward.to(self.policy_model.device)
@@ -153,8 +154,6 @@ class SCoRETrainer(Trainer):
 
         Returns: Tensors for first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
         """
-        # Clear CUDA cache
-        torch.cuda.empty_cache()
 
         # Initialize storage for results
         all_first_attempt_kl_divs = []
@@ -201,12 +200,23 @@ class SCoRETrainer(Trainer):
             # Calculate first attempt rewards
             first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_mini_batch)
 
+            del(
+                tokenized_first_prompts,
+                first_logits,
+                first_attempt_generations,
+                ref_first_output,
+                ref_first_logits
+            )
+
             # SECOND ATTEMPT
 
             # Prepare second attempt inputs
             _, tokenized_second_prompts = self.policy_model.prepare_second_attempt_input(
                 first_messages, first_decoded_completions, self.config['second_attempt_prompt']
             )
+
+            del first_messages, first_decoded_completions
+
             second_attempt_context_length = tokenized_second_prompts['input_ids'].shape[1]
 
             # Generate second attempt policy completions
@@ -241,17 +251,18 @@ class SCoRETrainer(Trainer):
             all_second_attempt_rewards.append(second_attempt_rewards)
 
             # Cleanup for this mini-batch
-            del (
-                first_logits,
-                ref_first_logits,
-                first_outputs,
-                second_logits,
-                ref_second_logits,
+            del(
+                tokenized_second_prompts,
                 second_outputs,
-                first_decoded_completions,
+                second_logits,
+                ref_second_output,
+                ref_second_logits,
                 second_decoded_completions,
+                first_attempt_kl_divs,
+                first_attempt_rewards,
+                second_attempt_kl_divs,
+                second_attempt_rewards
             )
-            torch.cuda.empty_cache()
 
         # Concatenate results from all mini-batches
         first_attempt_kl_divs = torch.cat(all_first_attempt_kl_divs, dim=0)

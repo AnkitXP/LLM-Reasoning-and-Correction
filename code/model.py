@@ -104,7 +104,7 @@ class PolicyModel():
         """
         Saves the model based on the save intervals.
         """
-        model_dir = config['save_dir']+'/SCoRE-' + config['policy_model_name']
+        model_dir = config['save_dir']+'/SCoRE-' + config['policy_model_name'] + '-EPS-' + config['total_episodes']
         parent_dir = os.path.join(os.getcwd(), os.pardir)
         save_dir = os.path.join(parent_dir, model_dir)
         self.model.save_pretrained(save_dir)

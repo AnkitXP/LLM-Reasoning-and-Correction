@@ -2,7 +2,7 @@
 
 ##NECESSARY JOB SPECIFICATIONS
 #SBATCH --job-name=Run_Main       #Set the job name
-#SBATCH --time=00:15:00             #Set the wall clock limit
+#SBATCH --time=10:00:00             #Set the wall clock limit
 #SBATCH --nodes=1                 #Request 1 node
 #SBATCH --ntasks-per-node=4       #Request 8 cores per node
 #SBATCH --mem=64Gb                 #Request 8GB per node 
