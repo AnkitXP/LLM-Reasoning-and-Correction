@@ -111,6 +111,13 @@ class SCoRETrainer(Trainer):
                     # Update progress bar after every batch
                     epoch_pbar.update(1)
 
+                    epoch_pbar.set_postfix(
+                                            Batch=batch_idx + 1,
+                                            Reward=f"{reward.item():.4f}",
+                                            Stage=stage,
+                                            Episode=f"{episode}/{self.config['total_episodes']}"
+                                        )
+
                     # Accumulate gradients and perform optimization step
                     if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.get_dataloader()):
                         optimizer.step()
