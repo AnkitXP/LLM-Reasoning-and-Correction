@@ -195,3 +195,34 @@ def check_correct(completions, solutions):
                 correct.append(0)
 
         return correct
+
+def forward(
+    model: torch.nn.Module,
+    query_responses: torch.Tensor,
+    pad_token_id: int,
+) -> torch.nn.Module:
+    """
+    Performs a forward pass through the model with the given query responses and pad token ID.
+
+    Args:
+        model (`torch.nn.Module`):
+            The model to perform the forward pass.
+        query_responses (`torch.Tensor`):
+            The tensor containing the query responses.
+        pad_token_id (`int`):
+            The token ID representing the pad token.
+
+    Returns:
+        `torch.nn.Module`:
+            The output of the model, including hidden states.
+    """
+    attention_mask = query_responses != pad_token_id
+    position_ids = attention_mask.cumsum(1) - attention_mask.long()
+    input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
+    return model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        return_dict=True,
+        output_hidden_states=True,
+    )

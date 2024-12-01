@@ -14,7 +14,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
-from utils import check_correct, truncate_response, first_true_indices
+from utils import check_correct, truncate_response, first_true_indices, forward
 
 class SCoRETrainer(Trainer):
     def __init__(self, config, policy_model, reference_model, train_dataset):
@@ -93,8 +93,6 @@ class SCoRETrainer(Trainer):
                             + self.config['beta_one'] * (first_attempt_kl_divs + second_attempt_kl_divs)
                             )
 
-                    reward = reward.sum()
-
                     episode_reward += reward.item()
                     total_kl_div += torch.sum(first_attempt_kl_divs + second_attempt_kl_divs).item()
                     total_first_attempt_reward += torch.sum(first_attempt_rewards).item()
@@ -155,78 +153,114 @@ class SCoRETrainer(Trainer):
 
         Returns: Tensors for first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
         """
-        
-        #clear CUDA cache
+        # Clear CUDA cache
         torch.cuda.empty_cache()
 
-        # First attempt template
-        first_messages, tokenized_first_prompts = self.policy_model.prepare_first_attempt_input(
-                                                                            self.config['first_attempt_prompt'], 
-                                                                            problems_batch
-                                                                            )
+        # Initialize storage for results
+        all_first_attempt_kl_divs = []
+        all_first_attempt_rewards = []
+        all_second_attempt_kl_divs = []
+        all_second_attempt_rewards = []
 
-        # First attempt policy completions
-        first_outputs, first_logits = self.policy_model.generate(
-                                                        tokenized_first_prompts['input_ids'].to(self.policy_model.device), 
-                                                        tokenized_first_prompts['attention_mask'].to(self.policy_model.device),
-                                                        **self.config['gen_kwargs']
-                                                        )
-        # First attempt reference completions
-        _, ref_first_logits = self.reference_model.generate(
-                                                        tokenized_first_prompts['input_ids'].to(self.reference_model.device), 
-                                                        tokenized_first_prompts['attention_mask'].to(self.reference_model.device),
-                                                        **self.config['gen_kwargs']
-                                                        )
-                    
-        #store kl_divergence
-        first_attempt_kl_divs = self.calculate_kl_divergence(first_logits, ref_first_logits, first_outputs)
-        
-        # decode first attempt outputs
-        first_decoded_completions = self.policy_model.tokenizer.batch_decode(first_outputs, skip_special_tokens=True) 
+        # Get batch size for rollouts
+        batch_size = self.config['local_rollout_forward_batch_size']
 
-        # calculate first attempt rewards
-        first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_batch)
+        for i in range(0, len(problems_batch), batch_size):
+            # Slice mini-batches
+            problems_mini_batch = problems_batch[i : i + batch_size]
+            solutions_mini_batch = solutions_batch[i : i + batch_size]
 
-        # Cleanup first attempt variables
-        del first_logits, ref_first_logits, first_outputs
-        torch.cuda.empty_cache()
-        
-        # Second attempt template
-        _, tokenized_second_prompts = self.policy_model.prepare_second_attempt_input(
-                                                                    first_messages, 
-                                                                    first_decoded_completions, 
-                                                                    self.config['second_attempt_prompt']
-                                                                    )
-        # second attempt policy completions
-        second_outputs, second_logits = self.policy_model.generate(
-                                    tokenized_second_prompts['input_ids'].to(self.policy_model.device),
-                                    tokenized_second_prompts['attention_mask'].to(self.policy_model.device),
-                                    **self.config['gen_kwargs']
-                                    )
-        
-        # second attempt reference completions
-        _, ref_second_logits = self.reference_model.generate(
-                                                        tokenized_second_prompts['input_ids'].to(self.reference_model.device), 
-                                                        tokenized_second_prompts['attention_mask'].to(self.reference_model.device),
-                                                        **self.config['gen_kwargs']
-                                                        )
+            # FIRST ATTEMPT
 
-        del tokenized_second_prompts, first_messages, first_decoded_completions
+            # Prepare first attempt inputs
+            first_messages, tokenized_first_prompts = self.policy_model.prepare_first_attempt_input(
+                self.config['first_attempt_prompt'], problems_mini_batch
+            )
+            first_attempt_context_length = tokenized_first_prompts['input_ids'].shape[1]
 
-        # second attempt kl_divergence   
-        second_attempt_kl_divs = self.calculate_kl_divergence(second_logits, ref_second_logits, second_outputs)
+            # Generate first attempt policy completions
+            first_outputs, first_logits = self.policy_model.generate(
+                input_ids=tokenized_first_prompts['input_ids'], **self.config['gen_kwargs']
+            )
+            first_attempt_generations = first_outputs[:, first_attempt_context_length:]
 
-        # decode second attempt outputs
-        second_decoded_completions = self.policy_model.tokenizer.batch_decode(second_outputs, skip_special_tokens=True)
+            # Generate first attempt reference logits
+            ref_first_output = forward(self.reference_model.model, first_outputs, self.reference_model.tokenizer.pad_token_id)
+            ref_first_logits = ref_first_output.logits[:, first_attempt_context_length - 1 : -1]
 
-        # calculate second attempt rewards
-        second_attempt_rewards = self.compute_rewards(second_decoded_completions, solutions_batch)
+            # Calculate first attempt KL divergence
+            first_attempt_kl_divs = self.calculate_kl_divergence(
+                first_logits, ref_first_logits, first_attempt_generations
+            )
 
-        # Cleanup second attempt variables
-        del second_logits, ref_second_logits, second_outputs, second_decoded_completions
-        gc.collect()
+            # Decode first attempt outputs
+            first_decoded_completions = self.policy_model.tokenizer.batch_decode(
+                first_attempt_generations, skip_special_tokens=True
+            )
+
+            # Calculate first attempt rewards
+            first_attempt_rewards = self.compute_rewards(first_decoded_completions, solutions_mini_batch)
+
+            # SECOND ATTEMPT
+
+            # Prepare second attempt inputs
+            _, tokenized_second_prompts = self.policy_model.prepare_second_attempt_input(
+                first_messages, first_decoded_completions, self.config['second_attempt_prompt']
+            )
+            second_attempt_context_length = tokenized_second_prompts['input_ids'].shape[1]
+
+            # Generate second attempt policy completions
+            second_outputs, second_logits = self.policy_model.generate(
+                input_ids=tokenized_second_prompts['input_ids'], **self.config['gen_kwargs']
+            )
+            second_attempt_generations = second_outputs[:, second_attempt_context_length:]
+
+            # Generate second attempt reference logits
+            ref_second_output = forward(
+                self.reference_model.model, second_outputs, self.reference_model.tokenizer.pad_token_id
+            )
+            ref_second_logits = ref_second_output.logits[:, second_attempt_context_length - 1 : -1]
+
+            # Calculate second attempt KL divergence
+            second_attempt_kl_divs = self.calculate_kl_divergence(
+                second_logits, ref_second_logits, second_attempt_generations
+            )
+
+            # Decode second attempt outputs
+            second_decoded_completions = self.policy_model.tokenizer.batch_decode(
+                second_attempt_generations, skip_special_tokens=True
+            )
+
+            # Calculate second attempt rewards
+            second_attempt_rewards = self.compute_rewards(second_decoded_completions, solutions_mini_batch)
+
+            # Collect results from mini-batch
+            all_first_attempt_kl_divs.append(first_attempt_kl_divs)
+            all_first_attempt_rewards.append(first_attempt_rewards)
+            all_second_attempt_kl_divs.append(second_attempt_kl_divs)
+            all_second_attempt_rewards.append(second_attempt_rewards)
+
+            # Cleanup for this mini-batch
+            del (
+                first_logits,
+                ref_first_logits,
+                first_outputs,
+                second_logits,
+                ref_second_logits,
+                second_outputs,
+                first_decoded_completions,
+                second_decoded_completions,
+            )
+            torch.cuda.empty_cache()
+
+        # Concatenate results from all mini-batches
+        first_attempt_kl_divs = torch.cat(all_first_attempt_kl_divs, dim=0)
+        first_attempt_rewards = torch.cat(all_first_attempt_rewards, dim=0)
+        second_attempt_kl_divs = torch.cat(all_second_attempt_kl_divs, dim=0)
+        second_attempt_rewards = torch.cat(all_second_attempt_rewards, dim=0)
 
         return first_attempt_kl_divs, first_attempt_rewards, second_attempt_kl_divs, second_attempt_rewards
+        
 
     def calculate_kl_divergence(self, policy_logits, ref_logits, response):
         """
@@ -236,12 +270,12 @@ class SCoRETrainer(Trainer):
         INVALID_LOGPROB = 1.0  # Set to -inf for invalid logprobs (padding tokens)
 
         # Compute log probabilities for policy model
-        all_logprob = F.log_softmax(policy_logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+        all_logprob = F.log_softmax(policy_logits, dim=-1, dtype=torch.bfloat16)  # (batch_size, seq_len, vocab_size)
         policy_logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)  # (batch_size, seq_len)
 
         # Temperature scaling for the reference logits
         ref_logits /= self.config['gen_kwargs']['temperature'] + 1e-7
-        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)  # (batch_size, seq_len, vocab_size)
+        ref_all_logprob = F.log_softmax(ref_logits, dim=-1, dtype=torch.bfloat16)  # (batch_size, seq_len, vocab_size)
         ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)  # (batch_size, seq_len)
 
         # Truncate response (e.g., if it reaches an EOS token)
@@ -292,5 +326,5 @@ class SCoRETrainer(Trainer):
         """        
         rewards = check_correct(completions, solutions)
 
-        rewards_tensor = torch.tensor(rewards, dtype=torch.float32, requires_grad = True).unsqueeze(1)        
+        rewards_tensor = torch.tensor(rewards, dtype=torch.float16, requires_grad = True)       
         return rewards_tensor.to(self.policy_model.device)

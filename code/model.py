@@ -16,48 +16,38 @@ class PolicyModel():
         model_dir = os.path.join(parent_dir, config['model_dir'])
         model_path = os.path.join(model_dir, config['policy_model_name'])
         
-        self.model = AutoModelForCausalLM.from_pretrained(model_path).to(self.device)
+        self.model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self.model.config.pad_token_id = self.tokenizer.eos_token_id
 
-    def generate(self, input_ids, attention_mask=None, **gen_kwargs):
+    def generate(self, input_ids, **gen_kwargs):
         """
         Generates only the completion and respective logits based on input length
         
         Returns tensors padded responses [batch size, sequence length] and padded logits [batch size, sequence length, vocabulary size]
         """
+    
+        torch.cuda.empty_cache()
 
-        responses = []
-        logitss = []
-        batch_size = input_ids.shape[0]
+        attention_mask = input_ids != self.tokenizer.pad_token_id
+        inputs = torch.masked_fill(input_ids, ~attention_mask, 0)
 
-        for i in range(0, batch_size, config['local_rollout_forward_batch_size']):
-            outputs = self.model.generate(  
-                            input_ids=input_ids, 
-                            attention_mask=attention_mask, 
-                            **gen_kwargs
-                            )
-
-            # Extract only the completion part
-            input_length = input_ids.shape[1]
-            completions = outputs.sequences[:, input_length:]
-            
-            # Stack the logits for the completion part only
-            logits = torch.stack(outputs.scores, 1)
-            
-            responses.append(completions)
-            logitss.append(logits)
+        outputs = self.model.generate(  
+                        input_ids=inputs.to(self.device), 
+                        attention_mask=attention_mask.to(self.device), 
+                        **gen_kwargs
+                        )
+        
+        # Stack the logits for the completion part only
+        logitss = torch.stack(outputs.scores, 1)
+        responses = outputs.sequences
 
         # padding tensors
         padded_responses = pad(responses, padding_value=self.tokenizer.pad_token_id, padding_side="right")
         padded_logitss = pad(logitss, padding_value=0, padding_side="right")
-
-        # reshaping
-        padded_responses = padded_responses.view(-1, padded_responses.shape[-1])[:batch_size]
-        padded_logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:batch_size]
         
         return padded_responses, padded_logitss
     

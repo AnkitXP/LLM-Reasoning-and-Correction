@@ -4,12 +4,12 @@ config = {
     'load_dir' : 'saved_models/[Add Complete Path]/',
     'log_dir' : 'logs/',
 
-    'policy_model_name' : 'ai-nexuz/llama-3.2-1b-instruct-fine-tuned',
+    'policy_model_name' : "ai-nexuz/llama-3.2-1b-instruct-fine-tuned",
 
     'seed' : 44,
-    'batch_size' : 2,
-    'local_rollout_forward_batch_size': 1,
-    'gradient_accumulation_steps': 1,
+    'batch_size' : 16,
+    'local_rollout_forward_batch_size': 4,
+    'gradient_accumulation_steps': 4,
     'total_episodes' : 100,
     'save_interval' : 20,
     'alpha': 10,
@@ -19,8 +19,8 @@ config = {
 
     'gen_kwargs' : {
             'max_new_tokens': 500,
-            'top_k': 50,
-            'top_p': 0.95,
+            'top_k': 0,
+            'top_p': 1,
             'do_sample': True,
             'temperature': 1.0,
             'return_dict_in_generate' : True,
