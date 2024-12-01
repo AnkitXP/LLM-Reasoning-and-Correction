@@ -32,10 +32,17 @@ if __name__ == '__main__':
 
     set_seed(config['seed'])
 
-    if args.task == 'train':
-        download_and_save_model(config['policy_model_name'], config['model_dir'])
+    if args.task == 'download':
+        download_and_save_model(
+                                config['policy_model_name'], 
+                                config['model_dir']
+                                )
+
+    elif args.task == 'train':
         train_model()
+
     elif args.task == 'evaluate':
         evaluate_model()        
+    
     else:
         raise ValueError('Invalid Task')

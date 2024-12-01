@@ -1,6 +1,5 @@
 import torch
 import os
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import transformers
 transformers.logging.set_verbosity_error()
 from transformers import AutoModelForCausalLM, AutoTokenizer
