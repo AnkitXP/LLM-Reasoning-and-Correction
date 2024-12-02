@@ -108,15 +108,13 @@ class SCoRETrainer(Trainer):
                     reward = reward / accumulation_steps
                     reward.backward()
 
-                    # Update progress bar after every batch
+                    # Update progress bar with current batch reward
+                    epoch_pbar.set_postfix({
+                        "Stage": stage,
+                        "Episode": f"{episode}/{self.config['total_episodes']}",
+                        "Batch Reward": reward.item()
+                    })
                     epoch_pbar.update(1)
-
-                    epoch_pbar.set_postfix(
-                                            Batch=batch_idx + 1,
-                                            Reward=f"{reward.item():.4f}",
-                                            Stage=stage,
-                                            Episode=f"{episode}/{self.config['total_episodes']}"
-                                        )
 
                     # Accumulate gradients and perform optimization step
                     if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(self.get_dataloader()):
@@ -128,8 +126,7 @@ class SCoRETrainer(Trainer):
                 avg_first_attempt_reward = total_first_attempt_reward / len(self.get_dataloader())
                 avg_second_attempt_reward = total_second_attempt_reward / len(self.get_dataloader())
 
-                # Update progress bar description
-                epoch_pbar.set_description(f"{stage} - Episode {episode}/{self.config['total_episodes']} - Reward: {episode_reward:.4f}")
+                print(f'Episode {episode} {stage} completed. Total rewards: {episode_reward:.4f}')
 
                 # Log metrics to TensorBoard
                 self.writer.add_scalar(f'{stage}/Reward', episode_reward, episode)
