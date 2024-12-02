@@ -35,7 +35,7 @@ class SCoRETrainer(Trainer):
         self.optimizer_config = {
                             "lr": self.config['lr'], 
                             "betas": (0.9, 0.999), 
-                            "eps": self.config['total_episodes'], 
+                            "eps": 1e-8, 
                             "weight_decay": 0.01
                             }
         self.scheduler_config = {
@@ -50,9 +50,11 @@ class SCoRETrainer(Trainer):
         accumulation_steps = self.config['gradient_accumulation_steps']
         total_batches = len(self.get_dataloader()) * self.config['total_episodes']
         accumulated_batch_size = self.config['batch_size'] * accumulation_steps
-        epoch_pbar = tqdm(total=total_batches, desc="Training Progress")
+        
 
         for stage in ["Stage I", "Stage II"]:
+
+            epoch_pbar = tqdm(total=total_batches, desc="Training Progress")
 
             #create optimizer and scheduler for stage I and II
             optimizer, scheduler = self.create_optimizer_and_scheduler(
@@ -126,7 +128,7 @@ class SCoRETrainer(Trainer):
                 avg_first_attempt_reward = total_first_attempt_reward / len(self.get_dataloader())
                 avg_second_attempt_reward = total_second_attempt_reward / len(self.get_dataloader())
 
-                print(f'Episode {episode} {stage} completed. Total rewards: {episode_reward:.4f}')
+                print(f'{stage} Episode {episode}  completed. Total rewards: {episode_reward:.4f}')
 
                 # Log metrics to TensorBoard
                 self.writer.add_scalar(f'{stage}/Reward', episode_reward, episode)
