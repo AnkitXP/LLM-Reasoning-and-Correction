@@ -7,14 +7,18 @@ from config import config
 from utils import pad
 
 class PolicyModel():
-    def __init__(self):
+    def __init__(self, model_path=None):
         """
         Initialize the policy model and tokenizer
         """
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         parent_dir = os.path.join(os.getcwd(), os.pardir)
-        model_dir = os.path.join(parent_dir, config['model_dir'])
-        model_path = os.path.join(model_dir, config['policy_model_name'])
+
+        if model_path is None:            
+            model_dir = os.path.join(parent_dir, config['model_dir'])
+            model_path = os.path.join(model_dir, config['policy_model_name'])
+        else:
+            model_path = os.path.join(parent_dir, model_path)
         
         self.model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16).to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
